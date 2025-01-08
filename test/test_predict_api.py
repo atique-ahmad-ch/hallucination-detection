@@ -23,6 +23,18 @@ test_data = [
         "response": "President Richard Nixon",
         "expected_prediction": "no"
     },
+    {
+        "context": "The Oberoi family is an Indian family that is famous for its involvement in hotels, namely through The Oberoi Group.The Oberoi Group is a hotel company with its head office in Delhi.",
+        "prompt": "The Oberoi family is part of a hotel company that has a head office in what city?",
+        "response": "lahore",
+        "expected_prediction": "no"
+    },
+    {
+        "context": "The Oberoi family is an Indian family that is famous for its involvement in hotels, namely through The Oberoi Group.The Oberoi Group is a hotel company with its head office in Delhi.",
+        "prompt": "The Oberoi family is part of a hotel company that has a head office in what city?",
+        "response": "Delhi",
+        "expected_prediction": "yes"
+    }
     # Add more examples here as needed
 ]
 
