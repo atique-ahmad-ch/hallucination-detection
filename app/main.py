@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import pickle
-import numpy as np
 import os
 
 # Initialize FastAPI
@@ -36,17 +35,24 @@ class PredictRequest(BaseModel):
 @app.post("/predict/")
 def predict(request: PredictRequest):
     try:
-        # Combine context and prompt for prediction (this is just an example)
-        input_text = f"{request.context} {request.prompt}"
+        # Combine context, prompt, and response for prediction
+        input_text = f"{request.context} {request.prompt} {request.response}"
 
         # Transform the input text using the vectorizer
         input_vector = vectorizer.transform([input_text])
 
         # Make a prediction using the trained model
         prediction = model.predict(input_vector)
+        prediction_proba = model.predict_proba(input_vector)[:, 1]  # Get the probability for the positive class
 
-        # Return the prediction as a response
-        return {"prediction": prediction[0]}
-    
+        # Map the prediction to a label
+        prediction_label = 'yes' if prediction[0] == 1 else 'no'
+
+        # Return the prediction as a response with probability
+        return {
+            "prediction": prediction_label,
+            "probability": float(prediction_proba[0])
+        }
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
