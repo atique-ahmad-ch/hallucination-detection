@@ -2,13 +2,16 @@ import pandas as pd
 import os
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, log_loss
+from sklearn.ensemble import StackingClassifier
 import pickle
 
 def train_model():
     """
-    Trains a logistic regression model on the dataset.
+    Trains an ensemble stacking model (Logistic Regression, Random Forest, and SVM) on the dataset and calculates the loss.
     """
     # Load preprocessed data
     df = pd.read_csv("/Users/ebricks/Desktop/hallucination-detection/data/preprocessed_dataset.csv")
@@ -32,16 +35,29 @@ def train_model():
     X_train_tfidf = vectorizer.fit_transform(X_train)
     X_test_tfidf = vectorizer.transform(X_test)
 
-    # Train a Random Forest Classifier
-    clf = RandomForestClassifier(n_estimators=100, random_state=42)
+    # Define base models for stacking
+    base_learners = [
+        ('logreg', LogisticRegression(random_state=42, max_iter=1000)),
+        ('rf', RandomForestClassifier(n_estimators=100, random_state=42)),
+        ('svc', SVC(probability=True, random_state=42))
+    ]
+
+    # Create Stacking Classifier with Logistic Regression as the meta-model
+    clf = StackingClassifier(estimators=base_learners, final_estimator=LogisticRegression(random_state=42))
+
+    # Train the stacked model
     clf.fit(X_train_tfidf, y_train)
 
     # Make predictions
     y_pred = clf.predict(X_test_tfidf)
+    y_pred_proba = clf.predict_proba(X_test_tfidf)[:, 1]  # Probabilities for log loss
 
     # Evaluate the model
     accuracy = accuracy_score(y_test, y_pred)
+    loss = log_loss(y_test, y_pred_proba)  # Log loss calculation
+
     print(f"Accuracy: {accuracy * 100:.2f}%")
+    print(f"Log Loss: {loss:.4f}")
 
     # Create model directory if it doesn't exist
     model_dir = 'model'
@@ -49,13 +65,13 @@ def train_model():
         os.makedirs(model_dir)
 
     # Save the model and vectorizer to disk
-    with open(os.path.join(model_dir, 'model.pkl'), 'wb') as model_file:
+    with open(os.path.join(model_dir, 'stacked_model.pkl'), 'wb') as model_file:
         pickle.dump(clf, model_file)
 
     with open(os.path.join(model_dir, 'vectorizer.pkl'), 'wb') as vectorizer_file:
         pickle.dump(vectorizer, vectorizer_file)
 
-    print("Model and vectorizer saved.")
+    print("Stacked Model and vectorizer saved.")
 
 if __name__ == "__main__":
     train_model()
