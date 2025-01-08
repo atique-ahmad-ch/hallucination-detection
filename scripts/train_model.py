@@ -23,9 +23,10 @@ def train_model():
     # Handle NaN values by replacing them with empty strings
     df['context'] = df['context'].fillna('')
     df['prompt'] = df['prompt'].fillna('')
+    df['response'] = df['response'].fillna('')
 
     # Extract features (context and prompt) and target (hallucination)
-    X = df["context"] + " " + df["prompt"]  # Concatenate context and prompt for better feature representation
+    X = df["context"] + " " + df["prompt"] + " " + df["response"]   # Concatenate context and prompt for better feature representation
     # Convert 'hallucination' column to numerical values (1 for 'yes', 0 for 'no')
     y = df["hallucination"].map({'yes': 1, 'no': 0})  # The target variable
 
