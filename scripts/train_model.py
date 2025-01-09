@@ -1,87 +1,114 @@
 import pandas as pd
-import os
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, log_loss, f1_score, precision_score, recall_score
-from sklearn.ensemble import StackingClassifier
-import pickle
+from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments
+import torch
+import numpy as np
+from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+from torch.utils.data import Dataset
+
+def compute_metrics(eval_pred):
+    """Compute metrics like accuracy, precision, recall, and F1 score."""
+    logits, labels = eval_pred
+    predictions = torch.argmax(torch.tensor(logits), dim=-1).numpy()
+    labels = labels if isinstance(labels, np.ndarray) else labels.numpy()
+    precision, recall, f1, _ = precision_recall_fscore_support(labels, predictions, average="binary")
+    accuracy = accuracy_score(labels, predictions)
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+    }
+
 
 def train_model():
-    """
-    Trains an ensemble stacking model (Logistic Regression, Random Forest, and SVM) on the dataset
-    and calculates the loss, accuracy, F1 score, precision, and recall.
-    """
-    # Load preprocessed data
+    # Load the dataset
     df = pd.read_csv("/Users/ebricks/Desktop/hallucination-detection/data/preprocessed_dataset.csv")
-    
-    # Print column names to verify
-    print(df.columns)
-
-    # Handle NaN values by replacing them with empty strings
     df['context'] = df['context'].fillna('')
     df['prompt'] = df['prompt'].fillna('')
     df['response'] = df['response'].fillna('')
+    
+    # Combine the context, prompt, and response
+    X = df["context"] + " " + df["prompt"] + " " + df["response"]
+    y = df["hallucination"].map({'yes': 1, 'no': 0})
 
-    # Extract features (context and prompt) and target (hallucination)
-    X = df["context"] + " " + df["prompt"] + " " + df["response"]   # Concatenate context and prompt for better feature representation
-    # Convert 'hallucination' column to numerical values (1 for 'yes', 0 for 'no')
-    y = df["hallucination"].map({'yes': 1, 'no': 0})  # The target variable
-
-
-    # Split data into training and test sets
+    # Split into training and test sets
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Convert text data to numerical features using TF-IDF
-    vectorizer = TfidfVectorizer(stop_words="english")
-    X_train_tfidf = vectorizer.fit_transform(X_train)
-    X_test_tfidf = vectorizer.transform(X_test)
+    # Use a smaller subset of data for faster experimentation
+    X_train = X_train[:2000]  # Use only the first 1000 samples
+    y_train = y_train[:2000]
+    X_test = X_test[:400]    # Use only the first 200 samples
+    y_test = y_test[:400]
 
-    # Define base models for stacking
-    base_learners = [
-        ('logreg', LogisticRegression(random_state=42, max_iter=1000)),
-        ('rf', RandomForestClassifier(n_estimators=100, random_state=42))
-    ]
+    # Tokenize text using BERT tokenizer
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    train_encodings = tokenizer(list(X_train), truncation=True, padding=True, max_length=512)
+    test_encodings = tokenizer(list(X_test), truncation=True, padding=True, max_length=512)
 
-    # Create Stacking Classifier with Logistic Regression as the meta-model
-    clf = StackingClassifier(estimators=base_learners, final_estimator=LogisticRegression(random_state=42))
+    # Convert labels to tensors
+    train_labels = torch.tensor(list(y_train))
+    test_labels = torch.tensor(list(y_test))
 
-    # Train the stacked model
-    clf.fit(X_train_tfidf, y_train)
+    # Prepare datasets for training
+    class HallucinationDataset(Dataset):
+        def __init__(self, encodings, labels):
+            self.encodings = encodings
+            self.labels = labels
 
-    # Make predictions
-    y_pred = clf.predict(X_test_tfidf)
-    y_pred_proba = clf.predict_proba(X_test_tfidf)[:, 1]  # Probabilities for log loss
+        def __getitem__(self, idx):
+            item = {key: torch.tensor(val[idx]) for key, val in self.encodings.items()}
+            item['labels'] = self.labels[idx]
+            return item
+
+        def __len__(self):
+            return len(self.labels)
+
+    train_dataset = HallucinationDataset(train_encodings, train_labels)
+    test_dataset = HallucinationDataset(test_encodings, test_labels)
+
+    # Leverage GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Load pre-trained BERT model for sequence classification
+    model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
+    model.to(device)
+
+    # Define optimized training arguments
+    training_args = TrainingArguments(
+        output_dir='./model_output',
+        num_train_epochs=1,  # Reduced epochs for faster experimentation
+        per_device_train_batch_size=32,  # Increased batch size
+        per_device_eval_batch_size=64,
+        evaluation_strategy="epoch",
+        save_strategy="no",  # Disable saving during experimentation
+        logging_dir='./logs',
+        logging_steps=10,
+        disable_tqdm=False,  # Show training progress
+        report_to="none",
+    )
+
+    # Trainer setup with custom metrics
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=train_dataset,
+        eval_dataset=test_dataset,
+        compute_metrics=compute_metrics
+    )
+
+    # Train the model
+    trainer.train()
 
     # Evaluate the model
-    accuracy = accuracy_score(y_test, y_pred)
-    loss = log_loss(y_test, y_pred_proba)  
-    f1 = f1_score(y_test, y_pred)
-    precision = precision_score(y_test, y_pred)
-    recall = recall_score(y_test, y_pred)
+    eval_results = trainer.evaluate()
+    print("Evaluation Results:", eval_results)
 
-    # Print evaluation results
-    print(f"Accuracy: {accuracy * 100:.2f}%")
-    print(f"Log Loss: {loss:.4f}")
-    print(f"F1 Score: {f1:.4f}")
-    print(f"Precision: {precision:.4f}")
-    print(f"Recall: {recall:.4f}")
+    # Save the model
+    model.save_pretrained('./model')
+    tokenizer.save_pretrained('./model')
 
-    # Create model directory if it doesn't exist
-    model_dir = 'model'
-    if not os.path.exists(model_dir):
-        os.makedirs(model_dir)
-
-    # Save the model and vectorizer to disk
-    with open(os.path.join(model_dir, 'model.pkl'), 'wb') as model_file:
-        pickle.dump(clf, model_file)
-
-    with open(os.path.join(model_dir, 'vectorizer.pkl'), 'wb') as vectorizer_file:
-        pickle.dump(vectorizer, vectorizer_file)
-
-    print("Stacked Model and vectorizer saved.")
+    print("Training complete and model saved!")
 
 if __name__ == "__main__":
     train_model()
